@@ -374,6 +374,17 @@ st.caption("Prototyp · Übungsszenario für lösungsorientierte Gesprächsführ
 if not st.session_state.started:
     st.subheader("Wähle eine Gesprächsart")
     st.write("Jeder Fall stellt eine typische Situation aus dem Schulalltag dar. Wähle einen Fall und starte das Gespräch.")
+    st.info(
+        "**Datenschutz und KI-Nutzung:** Diese Trainingsumgebung verwendet Google Gemini für die "
+        "Gesprächssimulation und die Rückmeldungen. Deine Eingaben werden zur Verarbeitung an "
+        "Google übermittelt. In der kostenlosen API-Stufe können Eingaben zur Verbesserung "
+        "von Google-Diensten verwendet und von Menschen überprüft werden. Bitte gib keine "
+        "echten Namen oder vertraulichen Personendaten ein."
+    )
+    st.caption(
+        "**Einordnung:** Die KI-generierten Rückmeldungen sind Impulse zur persönlichen "
+        "Reflexion und Weiterentwicklung, keine objektive Beurteilung oder Zertifizierung."
+    )
     case_images = ["hausaufgaben.png", "meldet_sich_selten.png", "regelverletzung.png", "konflikt.png", "elterngespraech.png"]
     case_colors = ["#eaf4ff", "#f7ebfb", "#ffeded", "#eaf8ec", "#fff5d9"]
     case_names = list(SCENARIOS.keys())
@@ -416,7 +427,7 @@ if not st.session_state.started:
 
 with st.expander("Hinweise zum Übungsgespräch", expanded=not st.session_state.started):
     st.write("Du führst ein Gespräch mit fiktiven Kindern oder Eltern. Die KI bleibt in ihrer jeweiligen Rolle. Die Auswertung erfolgt erst am Schluss.")
-    st.info("Bitte verwende keine echten Namen oder identifizierenden Angaben zu Schülerinnen, Schülern, Eltern oder Mitarbeitenden.")
+    st.info("Bitte gib keine echten Namen oder vertraulichen Personendaten ein.")
 
 client = get_client()
 if client is None:
