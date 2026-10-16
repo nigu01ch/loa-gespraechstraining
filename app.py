@@ -2,7 +2,8 @@ import os
 from pathlib import Path
 from html import escape as html_escape
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from io import BytesIO
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -305,27 +306,58 @@ def get_client():
     return genai.Client(api_key=key)
 
 def generate_with_retry(client, **kwargs):
-    """Wiederholt Gemini-Anfragen bei vorübergehender Überlastung."""
-    max_attempts = 3
-
+    """Wiederholt vorübergehende Fehler höchstens dreimal nach dem Erstversuch."""
+    max_attempts = 4
     for attempt in range(max_attempts):
         try:
             return client.models.generate_content(**kwargs)
-
         except Exception as exc:
             error_text = str(exc).lower()
-
-            temporary_error = (
-                "503" in error_text
-                or "unavailable" in error_text
-                or "high demand" in error_text
+            daily_quota = any(term in error_text for term in (
+                "per_day", "perday", "requests_per_day", "rpd", "daily"
+            ))
+            transient_server_error = any(term in error_text for term in (
+                "503", "unavailable", "high demand", "502", "504"
+            ))
+            # Ein Minutenlimit ist nur dann ein automatischer Retry-Kandidat,
+            # wenn Gemini ausdrücklich ein kurzes Zeitfenster nennt.
+            minute_limit = (
+                ("429" in error_text or "resource_exhausted" in error_text)
+                and not daily_quota
+                and any(term in error_text for term in (
+                    "per_minute", "perminute", "requests_per_minute", "rpm"
+                ))
             )
-
-            if not temporary_error or attempt == max_attempts - 1:
+            if attempt == max_attempts - 1 or not (transient_server_error or minute_limit):
                 raise
+            time.sleep((2, 5, 10)[attempt])
 
-            wait_seconds = 2 ** (attempt + 1)
-            time.sleep(wait_seconds)
+
+def next_daily_reset_text():
+    """Nächster Reset der Gemini-Tagesquote: Mitternacht America/Los_Angeles."""
+    pacific = ZoneInfo("America/Los_Angeles")
+    swiss = ZoneInfo("Europe/Zurich")
+    now = datetime.now(pacific)
+    next_day = now.date() + timedelta(days=1)
+    reset = datetime(next_day.year, next_day.month, next_day.day, tzinfo=pacific)
+    return reset.astimezone(swiss).strftime("%d.%m.%Y um %H:%M Uhr (Schweizer Zeit)")
+
+
+def is_quota_error(exc):
+    error = str(exc).lower()
+    return any(term in error for term in ("429", "resource_exhausted", "quota exceeded", "rate limit"))
+
+
+def quota_message(exc):
+    error = str(exc).lower()
+    daily = any(term in error for term in ("per_day", "perday", "requests_per_day", "rpd", "daily"))
+    if daily:
+        return ("Das tägliche Gemini-Kontingent ist ausgeschöpft. "
+                f"Voraussichtlich kannst du ab {next_daily_reset_text()} wieder trainieren. "
+                "Die Freigabe kann sich etwas verzögern.")
+    return ("Gemini hat momentan eine Anfragegrenze erreicht. "
+            "Falls nur das Minutenlimit betroffen ist, versuche es in wenigen Minuten erneut. "
+            f"Falls das Tageslimit erreicht ist, wird es voraussichtlich am {next_daily_reset_text()} zurückgesetzt.")
 
 
 def is_multi_scenario():
@@ -365,6 +397,10 @@ if "started" not in st.session_state:
     st.session_state.started = False
 if "ended" not in st.session_state:
     st.session_state.ended = False
+if "failed_reply_key" not in st.session_state:
+    st.session_state.failed_reply_key = None
+if "failed_reply_message" not in st.session_state:
+    st.session_state.failed_reply_message = None
 if "selected_scenario" not in st.session_state:
     st.session_state.selected_scenario = "Hausaufgaben vergessen"
 
@@ -447,6 +483,8 @@ if st.session_state.started and not st.session_state.ended:
 
 
     if prompt:
+        st.session_state.failed_reply_key = None
+        st.session_state.failed_reply_message = None
         st.session_state.messages.append({
             "role": "user",
             "content": prompt
@@ -457,7 +495,16 @@ if st.session_state.started and not st.session_state.ended:
         and st.session_state.messages[-1]["role"] == "user"
     )
 
-    if waiting_for_reply:
+    current_reply_key = (st.session_state.selected_scenario, len(st.session_state.messages),
+                         st.session_state.messages[-1]["content"] if waiting_for_reply else "")
+    if waiting_for_reply and st.session_state.failed_reply_key == current_reply_key:
+        st.warning(st.session_state.failed_reply_message or "Die letzte Anfrage konnte nicht abgeschlossen werden.")
+        if st.button("Antwort erneut anfordern"):
+            st.session_state.failed_reply_key = None
+            st.session_state.failed_reply_message = None
+            st.rerun()
+
+    if waiting_for_reply and st.session_state.failed_reply_key != current_reply_key:
         try:
             with st.spinner(f"{respondent_label()} antwortet …"):
                 history = []
@@ -509,13 +556,16 @@ if st.session_state.started and not st.session_state.ended:
             st.rerun()
 
         except Exception as exc:
-            st.warning(
-                "Gemini konnte momentan nicht antworten. "
-                "Deine Nachricht bleibt gespeichert."
-            )
-            st.caption("Technischer Hinweis: " + str(exc))
-
+            if is_quota_error(exc):
+                message = quota_message(exc)
+            else:
+                message = "Gemini konnte momentan nicht antworten. Deine Nachricht bleibt gespeichert."
+            st.session_state.failed_reply_key = current_reply_key
+            st.session_state.failed_reply_message = message
+            st.warning(message)
             if st.button("Antwort erneut anfordern"):
+                st.session_state.failed_reply_key = None
+                st.session_state.failed_reply_message = None
                 st.rerun()
 
 
@@ -540,7 +590,10 @@ if st.session_state.started and not st.session_state.ended:
                     st.session_state.ended = True
                     st.rerun()
             except Exception as exc:
-                st.error("Die Auswertung konnte nicht erstellt werden. Technischer Hinweis: " + str(exc))
+                if is_quota_error(exc):
+                    st.warning(quota_message(exc) + " Dein Gespräch bleibt erhalten; du kannst die Auswertung später erneut starten.")
+                else:
+                    st.error("Die Auswertung konnte momentan nicht erstellt werden. Bitte versuche es später erneut.")
     with col2:
         if st.button("Neu beginnen", use_container_width=True):
             st.session_state.messages = []
