@@ -6,7 +6,7 @@ Dieser Prototyp simuliert ein Coachinggespräch zwischen einer Lehrperson und ei
 - Drei fiktive Übungsfälle: Hausaufgaben werden häufig vergessen; ein Kind meldet sich selten, obwohl es oft die Antwort weiss; ein Rahmengespräch nach einer Handy-Regelverletzung.
 - Chat mit einer KI, die in der Rolle des Kindes bleibt.
 - Auswertung nach fünf LOA-Kriterien mit Gesprächsbelegen.
-- Download von Gespräch und Auswertung als Textdatei.
+- Download von Gespräch und Auswertung als PDF.
 
 ## Was benötigt wird
 - Windows-PC mit Python
